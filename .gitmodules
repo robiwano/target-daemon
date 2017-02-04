@@ -1,0 +1,3 @@
+[submodule "daemon/externals/asio"]
+	path = daemon/externals/asio
+	url = https://github.com/chriskohlhoff/asio.git
