@@ -19,6 +19,8 @@ programs).
 
 **Q** : Queries current state. Can be given as command at any time, and also from non-active client.
 
+**X** : Exit server process. Can only be done from the active client.
+
 ### Generic Responses
 **OK** : Message was received and processed OK  
 **ERROR**=*<*error*>* : An error occurred, *<*error*>* can be one of:

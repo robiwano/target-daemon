@@ -12,7 +12,6 @@
 #include <memory>
 #include <utility>
 #include <chrono>
-#include <process.h>  
 
 #include <asio.hpp>
 #include <asio/deadline_timer.hpp>
@@ -20,7 +19,6 @@
 using asio::ip::tcp;
 
 using namespace std;
-using namespace chrono_literals;
 
 namespace
 {
@@ -28,7 +26,7 @@ namespace
     atomic<int> noOfSessions{};
 
     string audioPlayCmdLinePrefix_{};
-    int sessionTimeout_ = 20;   // Inactivity timeout before session terminates.
+    int sessionTimeout_ = 10;   // Inactivity timeout before session terminates.
 
     // trim from start
     static string ltrim(string&& s) {
@@ -147,7 +145,7 @@ namespace
         {
             cout << "Session " << sessionNumber_ << " started" << (activeSession_ ? " (active)." : ".") << endl;
             if (activeSession_)
-                target_control_ = make_unique<target_control>();
+                target_control_.reset(new target_control());
         }
         ~session()
         {
@@ -161,11 +159,25 @@ namespace
             do_read();
         }
 
+        void set_timer()
+        {
+            timer_.async_wait([this](error_code ec)
+            {
+                if (ec != asio::error::operation_aborted)
+                {
+                    cout << "Socket shutdown" << endl;
+                    socket_.shutdown(asio::socket_base::shutdown_both);
+                }
+                else
+                    set_timer();
+            });
+        }
+
         bool is_executing()
         {
             if (programJob_.valid())
             {
-                if (programJob_.wait_for(0s) == future_status::timeout)
+                if (programJob_.wait_for(chrono::seconds(0)) == future_status::timeout)
                     return true;
                 programJob_.get();
             }
@@ -201,10 +213,13 @@ namespace
                 for (auto& current_step : program_)
                 {
                     currentStepTime += current_step.time_to_execute_;
-                    if (cv_.wait_until(unique_lock<mutex>{mutex_}, currentStepTime, [&] { return stop_flag_; }))
                     {
-                        cout << "Program stopped!" << endl;
-                        return;
+                        unique_lock<mutex> lock(mutex_);
+                        if (cv_.wait_until(lock, currentStepTime, [&] { return stop_flag_; }))
+                        {
+                            cout << "Program stopped!" << endl;
+                            return;
+                        }
                     }
                     if (current_step.fn_)
                     {
@@ -230,28 +245,20 @@ namespace
         {
             try
             {
-	            switch (s.front())
-	            {
-	            case 'C':   // Clear program
-	                if (!activeSession_)
-	                    throw runtime_error("Busy");
-	
-	                stop_program();
-	                program_.clear();
-                    cout << "Program cleared!" << endl;
-	                break;
-	            
-	            case 'T':
-                    if (!activeSession_)
-                        throw runtime_error("Busy");
-                    program_.emplace_back(chrono::seconds(stoi(s.substr(1))), function<void()>{});
-	                break;
-	
-	            case 'A':   // Play audio
+                switch (s.front())
                 {
-                    if (!activeSession_)
-                        throw runtime_error("Busy");
-
+                case 'C':   // Clear program
+                    stop_program();
+                    program_.clear();
+                    cout << "Program cleared!" << endl;
+                    break;
+                
+                case 'T':
+                    program_.emplace_back(chrono::seconds(stoi(s.substr(1))), function<void()>{});
+                    break;
+    
+                case 'A':   // Play audio
+                {
                     auto arg = s.substr(1);
                     if (arg.empty())
                         throw runtime_error("Syntax");
@@ -269,27 +276,21 @@ namespace
 
                     });
                 }
-	                break;
-	
-	            case 'M':   // Move target
-	                if (!activeSession_)
-	                    throw runtime_error("Busy");
-	
-	                program_.emplace_back(chrono::seconds::zero(), [this, arg = stoi(s.substr(1))]
-	                {
-	                    cout << "Moving target to position '" << arg << "';";
-	                    if (target_control_)
-	                        target_control_->move_target(!!arg);
-	                });
-	                break;
+                    break;
+    
+                case 'M':   // Move target
+                    program_.emplace_back(chrono::seconds::zero(), [this, arg = stoi(s.substr(1))]
+                    {
+                        cout << "Moving target to position '" << arg << "';";
+                        if (target_control_)
+                            target_control_->move_target(!!arg);
+                    });
+                    break;
 
                 case 'P':   // Play audio file directly
                 {
                     if (is_executing())
                         throw runtime_error("Executing");
-
-                    if (!activeSession_)
-                        throw runtime_error("Busy");
 
                     auto arg = s.substr(1);
                     if (arg.empty())
@@ -306,66 +307,53 @@ namespace
                     break;
                 }
 
-	            case 'D':   // Move target directly
-	                if (is_executing())
-	                    throw runtime_error("Executing");
-	
-	                if (!activeSession_)
-	                    throw runtime_error("Busy");
-	
-	                if (target_control_)
-	                {
-	                    auto arg = stoi(s.substr(1));
-	                    cout << "Moving target to position '" << arg << "'" << endl;
-	                    target_control_->move_target(!!arg);
-	                }
-	                else
-	                    throw runtime_error("Target");
-	                break;
-	
-	            case 'R':   // Run program
-	                if (!activeSession_)
-	                    throw runtime_error("Busy");
-	
-	                start_program();
-	                break;
-	
-	            case 'S':   // Stop program
-	                if (!activeSession_)
-	                    throw runtime_error("Busy");
-	
-	                stop_program();
-	                break;
-	
-	            case 'Q':   // Query state
-	            {
-	                stringstream msg;
-	                auto t_relative = chrono::duration_cast<chrono::seconds>(clock_type::now() - programStartTime_).count();
+                case 'D':   // Move target directly
+                    if (is_executing())
+                        throw runtime_error("Executing");
+    
+                    if (target_control_)
+                    {
+                        auto arg = stoi(s.substr(1));
+                        cout << "Moving target to position '" << arg << "'" << endl;
+                        target_control_->move_target(!!arg);
+                    }
+                    else
+                        throw runtime_error("Target");
+                    break;
+    
+                case 'R':   // Run program
+                    start_program();
+                    break;
+    
+                case 'S':   // Stop program
+                    stop_program();
+                    break;
+    
+                case 'Q':   // Query state
+                {
+                    stringstream msg;
+                    auto t_relative = chrono::duration_cast<chrono::seconds>(clock_type::now() - programStartTime_).count();
                     auto t_total = chrono::seconds::zero();
                     for (auto& step : program_)
                         t_total += step.time_to_execute_;
 
-	                msg << "EXEC=" << (is_executing() ? to_string(t_relative) : "") << "\r\n"
-	                    << "PROG=" << (!program_.empty() ? to_string(t_total.count()) : "") << "\r\n"
-	                    << "POS=" << (target_control_ ? to_string(int(target_control_->position())) : "") << "\r\n";
-	                return msg.str();
-	            }
-	                break;
-
+                    msg << "EXEC=" << (is_executing() ? to_string(t_relative) : "") << "\r\n"
+                        << "PROG=" << (!program_.empty() ? to_string(t_total.count()) : "") << "\r\n"
+                        << "POS=" << (target_control_ ? to_string(int(target_control_->position())) : "") << "\r\n";
+                    return msg.str();
+                }
+                    break;
 
                 case 'X':
-                    if (!activeSession_)
-                        throw runtime_error("Busy");
-
                     cout << "Stopping server..." << endl;
                     socket_.get_io_context().stop();
                     break;
-	
-	            default:
-	                throw runtime_error("UnknownCommand");
-	            }
-	
-	            return move(string{});
+    
+                default:
+                    throw runtime_error("UnknownCommand");
+                }
+    
+                return move(string{});
             }
             catch (runtime_error& e)
             {
@@ -384,13 +372,7 @@ namespace
                 // Start watchdog timer
                 timer_.cancel();
                 timer_.expires_after(chrono::seconds(sessionTimeout_));
-                timer_.async_wait([this, self = shared_from_this()](error_code ec)
-                {
-                    if (ec != asio::error::operation_aborted)
-                    {
-                        socket_.shutdown(asio::socket_base::shutdown_both);
-                    }
-                });
+                set_timer();
             }
 
             socket_.async_read_some(asio::buffer(data_, max_length),
