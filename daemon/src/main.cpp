@@ -111,7 +111,7 @@ namespace
 
             target_control()
             {
-                if(gpioInitialise() < 0)
+                if (gpioInitialise() < 0)
                     throw runtime_error("GPIO not available!!");
 
                 gpioSetMode(GPIO::TURN_FRONT, PI_OUTPUT);
@@ -133,14 +133,14 @@ namespace
 
             future<void> move_target(bool toFront)
             {
-                return async(launch::async, [&, toFront]
-		{
+                return async(launch::async, [this, toFront]() mutable
+                {
                     position_ = toFront ? 1 : 0;
                     const int gpioBit = toFront ? GPIO::TURN_FRONT : GPIO::TURN_AWAY;
                     gpioWrite(gpioBit, 1);
                     this_thread::sleep_for(chrono::milliseconds(500));
                     gpioWrite(gpioBit, 0);
-		});
+                });
             }
 
             bool position() const
@@ -180,7 +180,7 @@ namespace
                 {
                     target_control_.reset(new target_control());
                 }
-                catch(exception& e)
+                catch (exception& e)
                 {
                     cerr << "Exception: " << e.what() << endl;
                 }
@@ -314,7 +314,7 @@ namespace
 
                     });
                 }
-                    break;
+                break;
 
                 case 'M':   // Move target
                 {
@@ -326,7 +326,7 @@ namespace
                             target_control_->move_target(!!arg);
                     });
                 }
-                    break;
+                break;
 
                 case 'P':   // Play audio file directly
                 {
@@ -383,7 +383,7 @@ namespace
                         << "POS=" << (target_control_ ? to_string(int(target_control_->position())) : "") << "\r\n";
                     return msg.str();
                 }
-                    break;
+                break;
 
                 case 'X':
                     cout << "Stopping server..." << endl;
