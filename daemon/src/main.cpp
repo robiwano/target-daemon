@@ -17,8 +17,11 @@
 #include <asio/deadline_timer.hpp>
 
 using asio::ip::tcp;
-
 using namespace std;
+
+#if RASPBERRY_PI
+#include <pigpio.h>
+#endif
 
 namespace
 {
@@ -93,7 +96,59 @@ namespace
         future<void> programJob_;
         clock_type::time_point programStartTime_;
 
-#ifdef WIN32
+#if RASPBERRY_PI
+        // Raspberry Pi implementation
+        struct target_control
+        {
+            atomic<bool> position_{};
+
+            enum GPIO
+            {
+                ENABLE = 0,
+                TURN_FRONT = 1,
+                TURN_AWAY = 4,
+            };
+
+            target_control()
+            {
+                if(gpioInitialise() < 0)
+                    throw runtime_error("GPIO not available!!");
+
+                gpioSetMode(GPIO::TURN_FRONT, PI_OUTPUT);
+                gpioSetMode(GPIO::TURN_AWAY, PI_OUTPUT);
+                gpioSetMode(GPIO::ENABLE, PI_OUTPUT);
+
+                gpioWrite(GPIO::TURN_FRONT, 0);
+                gpioWrite(GPIO::TURN_AWAY, 0);
+                gpioWrite(GPIO::ENABLE, 1);
+            }
+            ~target_control()
+            {
+                gpioWrite(GPIO::TURN_FRONT, 0);
+                gpioWrite(GPIO::TURN_AWAY, 0);
+                gpioWrite(GPIO::ENABLE, 0);
+
+                gpioTerminate();
+            }
+
+            future<void> move_target(bool toFront)
+            {
+                return async(launch::async, [&, toFront]
+		{
+                    position_ = toFront ? 1 : 0;
+                    const int gpioBit = toFront ? GPIO::TURN_FRONT : GPIO::TURN_AWAY;
+                    gpioWrite(gpioBit, 1);
+                    this_thread::sleep_for(chrono::milliseconds(500));
+                    gpioWrite(gpioBit, 0);
+		});
+            }
+
+            bool position() const
+            {
+                return position_;
+            }
+        };
+#else
         // Dummy target implementation
         struct target_control
         {
@@ -109,31 +164,6 @@ namespace
                 return position_;
             }
         };
-#else
-        // Raspberry Pi implementation
-        struct target_control
-        {
-            atomic<bool> position_{};
-
-            target_control()
-            {
-                // TODO: Set target enable bit 
-            }
-            ~target_control()
-            {
-                // TODO: Reset target enable bit 
-            }
-
-            future<void> move_target(bool toFront)
-            {
-                return async(launch::async, [] {});
-            }
-    
-            bool position() const
-            {
-                return position_;
-            }
-    };
 #endif
         unique_ptr<target_control> target_control_{};
 
@@ -145,7 +175,16 @@ namespace
         {
             cout << "Session " << sessionNumber_ << " started" << (activeSession_ ? " (active)." : ".") << endl;
             if (activeSession_)
-                target_control_.reset(new target_control());
+            {
+                try
+                {
+                    target_control_.reset(new target_control());
+                }
+                catch(exception& e)
+                {
+                    cerr << "Exception: " << e.what() << endl;
+                }
+            }
         }
         ~session()
         {
@@ -165,7 +204,6 @@ namespace
             {
                 if (ec != asio::error::operation_aborted)
                 {
-                    cout << "Socket shutdown" << endl;
                     socket_.shutdown(asio::socket_base::shutdown_both);
                 }
                 else
@@ -252,18 +290,18 @@ namespace
                     program_.clear();
                     cout << "Program cleared!" << endl;
                     break;
-                
+
                 case 'T':
                     program_.emplace_back(chrono::seconds(stoi(s.substr(1))), function<void()>{});
                     break;
-    
+
                 case 'A':   // Play audio
                 {
                     auto arg = s.substr(1);
                     if (arg.empty())
                         throw runtime_error("Syntax");
 
-                    program_.emplace_back(chrono::seconds::zero(), [this, arg = s.substr(1)]
+                    program_.emplace_back(chrono::seconds::zero(), [this, arg]
                     {
                         cout << "Playing audio file '" << arg << "';";
                         if (!audioPlayCmdLinePrefix_.empty())
@@ -277,14 +315,17 @@ namespace
                     });
                 }
                     break;
-    
+
                 case 'M':   // Move target
-                    program_.emplace_back(chrono::seconds::zero(), [this, arg = stoi(s.substr(1))]
+                {
+                    auto arg = stoi(s.substr(1));
+                    program_.emplace_back(chrono::seconds::zero(), [this, arg]
                     {
                         cout << "Moving target to position '" << arg << "';";
                         if (target_control_)
                             target_control_->move_target(!!arg);
                     });
+                }
                     break;
 
                 case 'P':   // Play audio file directly
@@ -310,7 +351,7 @@ namespace
                 case 'D':   // Move target directly
                     if (is_executing())
                         throw runtime_error("Executing");
-    
+
                     if (target_control_)
                     {
                         auto arg = stoi(s.substr(1));
@@ -320,15 +361,15 @@ namespace
                     else
                         throw runtime_error("Target");
                     break;
-    
+
                 case 'R':   // Run program
                     start_program();
                     break;
-    
+
                 case 'S':   // Stop program
                     stop_program();
                     break;
-    
+
                 case 'Q':   // Query state
                 {
                     stringstream msg;
@@ -348,11 +389,11 @@ namespace
                     cout << "Stopping server..." << endl;
                     socket_.get_io_context().stop();
                     break;
-    
+
                 default:
                     throw runtime_error("UnknownCommand");
                 }
-    
+
                 return move(string{});
             }
             catch (runtime_error& e)
@@ -375,8 +416,9 @@ namespace
                 set_timer();
             }
 
+            auto self = shared_from_this();
             socket_.async_read_some(asio::buffer(data_, max_length),
-                [this, self = shared_from_this()](error_code ec, size_t length)
+                [this, self](error_code ec, size_t length)
             {
                 if (!ec)
                 {
@@ -417,8 +459,9 @@ namespace
         void do_write(const string& msg)
         {
             size_t len = msg.copy(data_.data(), max_length);
+            auto self = shared_from_this();
             asio::async_write(socket_, asio::buffer(data_, len),
-                [this, self = shared_from_this()](error_code ec, size_t /*length*/)
+                [this, self](error_code ec, size_t /*length*/)
             {
                 if (!ec)
                 {
@@ -462,7 +505,7 @@ namespace
             for (int i = 1; i < argc; ++i)
                 tokens_.push_back(string(argv[i]));
         }
-        
+
         string getCmdOption(const string &option) const {
             vector<string>::const_iterator itr;
             itr = find(tokens_.begin(), tokens_.end(), option);
@@ -471,7 +514,7 @@ namespace
             }
             return string{};
         }
-        
+
         bool cmdOptionExists(const string &option) const {
             return find(tokens_.begin(), tokens_.end(), option)
                 != tokens_.end();
