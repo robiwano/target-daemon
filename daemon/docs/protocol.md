@@ -7,7 +7,7 @@ Simple text based TCP protocol. A program consists of one or more commands separ
 ### Commands
 
 **C** : Clear program. Removes all previous commands.  
-**T***xxx* : Delta time from last entry (*xxx* is in seconds)  
+**T***xxx* : Delta time from last entry (*xxx* is in seconds, with decimalpoint if needed)  
 **A***<*path*>* : Start playing the audio file at *<*path*>* (in programs)  
 **M***<*pos*>* : Move target to *<*pos*>* which can be **1** for target facing shooters, or **0** for target turned away (in 
 programs).  
@@ -39,11 +39,14 @@ programs).
 
 Example program (Milsnabb 10 s):
 
-    C;T0;M1;A/audio/kalle/forbered.wav
-    T50;M0
+    C;T0;M1;A/audio/kalle/ladda.wav
+    T50.0;A/audio/kalle/fardiga.wav
+    T0;M0
     T10;M1
     T10;M0
-    T2;A/audio/kalle/eld_upphor_nagra_funktioneringsfel.wav
+    T2;A/audio/kalle/EUH.wav
+    T2;A/audio/kalle/funktion.wav
+    T5;M1
 
 *Response*
 
