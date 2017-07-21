@@ -8,23 +8,23 @@ Simple text based TCP protocol. A program consists of one or more commands separ
 
 **C** : Clear program. Removes all previous commands.  
 **T***xxx* : Delta time from last entry (*xxx* is in seconds, with decimalpoint if needed)  
-**A***<*path*>* : Start playing the audio file at *<*path*>* (in programs)  
-**M***<*pos*>* : Move target to *<*pos*>* which can be **1** for target facing shooters, or **0** for target turned away (in 
+**A** *<*path*>* : Start playing the audio file at *<*path*>* (in programs)  
+**M** *<*pos*>* : Move target to *<*pos*>* which can be **1** for target facing shooters, or **0** for target turned away (in 
 programs).  
-**P***<*path*>* : Start playing the audio file at *<*path*>* directly.  
-**D***<*pos*>* : Directly move target to *<*pos*>*. Returns error if program is currently executing.
+**P** *<*path*>* : Start playing the audio file at *<*path*>* directly.  
+**D** *<*pos*>* : Directly move target to *<*pos*>*. Returns error if program is currently executing.
 
 **R** : Run current program.  
 **S** : Stop currently executing program, will reset program to start.  
 
-**Q** : Queries current state. Can be given as command at any time, and also from non-active client.
+**Q** : Queries current state. Can be given as command at any time.
 
 **X** : Exit server process. Can only be done from the active client.
 
 ### Generic Responses
 **OK** : Message was received and processed OK  
 **ERROR**=*<*error*>* : An error occurred, *<*error*>* can be one of:
-- *Busy* : Another TCP client is connected to the daemon. Only certain commands will be executed (**Q** for instance)
+- *Busy* : Another TCP client is connected to the daemon. Socket is disconnected directly after this message.
 - *Executing* : A new program is given during a program execution.
 - *Syntax* : Some error in the given message.
 - *Empty* : No program given.
