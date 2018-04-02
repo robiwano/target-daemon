@@ -11,7 +11,10 @@ endif()
 add_subdirectory(externals)
 
 set(SRC
-  src/main.cpp)
+  src/main.cpp
+  src/utility.cpp
+  src/utility.h
+  )
     
 add_executable(target_daemon
   ${SRC})
@@ -27,10 +30,12 @@ if (WIN32)
   )
 endif()
     
-target_link_libraries(target_daemon asio)
+target_link_libraries(target_daemon asio CLI11)
 
 if (UNIX)
   if (RASP_PI)
+    message(STATUS "Root: ${CMAKE_FIND_ROOT_PATH}")
+    target_include_directories(target_daemon PRIVATE ${CMAKE_FIND_ROOT_PATH}/usr/include)
     target_compile_definitions(
       target_daemon PRIVATE RASPBERRY_PI=1
     )
